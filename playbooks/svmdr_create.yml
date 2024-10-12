@@ -1,0 +1,144 @@
+#########################
+# Playbook creates:
+#- SVM, interfaces and data volume on source cluster
+#- Snapmirror relationship for SVM DR
+#- SVM DR-ready SVM on destination
+#
+# (c) Alexey Mikhaylov
+# NetApp Professional Services Germany
+# alexey.mikhaylov@netapp.com  
+#
+# DEMO purpose only!
+#########################
+
+---
+- hosts: localhost
+  gather_facts: no
+  connection: local
+  vars_files:
+    - "../vars.yml"
+  tasks:
+    - name: Set connection details dest
+      ansible.builtin.set_fact:
+        dest_auth:          &dest_auth
+          username:         "{{ dst_cluster.username }}"
+          password:         "{{ dst_cluster.password }}"
+          hostname:         "{{ dst_cluster.hostname }}"
+          validate_certs:   false
+          use_rest:         Auto
+      no_log: true
+
+    - name: Set connection details source
+      ansible.builtin.set_fact:
+        src_auth:           &src_auth
+          username:         "{{ src_cluster.username }}"
+          password:         "{{ src_cluster.password }}"
+          hostname:         "{{ src_cluster.hostname }}"
+          validate_certs:   false
+          use_rest:         Always
+      no_log: true
+    
+    - name: Create source SVM
+      netapp.ontap.na_ontap_svm:
+        <<: *src_auth
+        state: present
+        name: "{{ src_cluster.svm }}"
+        services:
+          cifs:
+            allowed: true
+          fcp:
+            allowed: true
+            enabled: true
+          nfs:
+            allowed: true
+            enabled: true
+          iscsi:
+            allowed: true
+            enabled: true
+      register: src_svm_create_result
+
+    - name: Create DR SVM
+      netapp.ontap.na_ontap_svm:
+        <<: *dest_auth
+        state: present
+        name: "{{ dst_cluster.svm }}"
+        subtype: dp_destination
+      register: src_svm_create_result
+
+    - name: Create SVM interface
+      netapp.ontap.na_ontap_interface:
+        <<: *src_auth
+        state: present
+        interface_name:    "{{ item.ifname }}"
+        home_port:         "{{ item.home_port }}"
+        home_node:         "{{ item.home_node }}"
+        admin_status:      up
+        address:           "{{ item.ip }}"
+        netmask:           "{{ item.netmask }}"
+        vserver:           "{{ src_cluster.svm }}"
+        service_policy:    "{{ item.svc_policy }}"
+      loop: "{{ src_cluster.interfaces }}"
+
+    - name: Create data volume
+      netapp.ontap.na_ontap_volume:
+        <<: *src_auth
+        state: present
+        name:  vol1
+        vserver: "{{ src_cluster.svm }}"
+        size: 5
+        size_unit: gb
+        space_guarantee: none
+        export_policy: default
+        wait_for_completion: true
+        aggregate_name: "{{ src_cluster.data_aggregate }}"
+    
+    - name: SVM routing
+      netapp.ontap.na_ontap_net_routes:
+        <<:          *src_auth
+        state:       present
+        vserver:     "{{ src_cluster.svm }}"
+        destination: 0.0.0.0/0
+        gateway:     "{{ gw }}"
+
+    - name: SVM DNS configuration
+      netapp.ontap.na_ontap_dns:
+        <<:          *src_auth
+        state:       present
+        vserver:     "{{ src_cluster.svm }}"
+        domains:     "{{ domain }}"
+        nameservers: "{{ dns_servers }}"
+
+    - name: Include CIFS tasks
+      ansible.builtin.include_tasks: svmdr_cifs_tasks.yml
+      when: configure_cifs
+
+    - name: Create SVM peering
+      netapp.ontap.na_ontap_vserver_peer:
+        <<: *src_auth
+        state: present
+        use_rest: always
+        vserver: "{{ src_cluster.svm }}"
+        peer_vserver: "{{ dst_cluster.svm }}"
+        peer_cluster: "{{ dst_cluster.cluster }}"
+        peer_options:
+          hostname: "{{ dst_cluster.hostname }}"
+        applications:
+          - snapmirror
+
+    - name: Create SnapMirror relationship - SVM DR
+      netapp.ontap.na_ontap_snapmirror:
+        <<: *dest_auth
+        state: present
+        hostname: "{{ dst_cluster.hostname }}"
+        source_endpoint:
+          cluster: "{{ src_cluster.cluster }}"
+          path: "{{ src_cluster.svm + ':' }}"
+        destination_endpoint:
+          cluster: "{{ dst_cluster.cluster }}"
+          path: "{{ dst_cluster.svm + ':' }}"
+        create_destination:
+          enabled: true
+        identity_preservation: "{{ identity_preservation }}"
+        #identity_preserve:     true
+      #when: src_svm_create_result is changed
+...

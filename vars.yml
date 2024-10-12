@@ -1,0 +1,38 @@
+src_cluster:
+  hostname: cluster1.domain.com
+  cluster: cluster1
+  svm: svm_demo55
+  username: admin
+  password: XXXXXXXX
+  data_aggregate: aggr_01_SSD_1
+  interfaces:
+    - ip: 172.10.3.155
+      netmask: 255.255.0.0
+      ifname: mgmt_lif
+      home_node: cluster1-01
+      home_port: "a0b-172"
+      svc_policy: default-management
+
+    - ip: 172.10.3.156
+      netmask: 255.255.0.0
+      ifname: data_lif
+      home_node: cluster1-01
+      home_port: "a0b-172"
+      svc_policy: default-data-files 
+
+dst_cluster:
+  hostname: cluster2.domain.com
+  cluster: cluster2
+  svm: svm_demo56
+  username: admin
+  password: XXXXX
+identity_preservation: full
+identity_preserve: true
+dns_servers:
+  - 10.6.5.5
+  - 10.6.5.7
+domain: domain.com
+ad_user: admin@domain.com
+ad_user_pwd: XXXXXXX
+gw: 172.10.0.1
+configure_cifs: true

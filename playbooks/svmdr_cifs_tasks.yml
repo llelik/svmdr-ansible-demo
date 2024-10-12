@@ -1,0 +1,59 @@
+#########################
+# Playbook actions:
+# - create CIFS server & join to AD
+# - create CIFS share
+#
+# (c) Alexey Mikhaylov
+# NetApp Professional Services Germany
+# alexey.mikhaylov@netapp.com  
+#
+# DEMO purpose only!
+#########################
+
+- name: Set connection details dest
+  ansible.builtin.set_fact:
+    dest_auth:          &dest_auth
+      username:         "{{ dst_cluster.username }}"
+      password:         "{{ dst_cluster.password }}"
+      hostname:         "{{ dst_cluster.hostname }}"
+      validate_certs:   false
+      use_rest:         Auto
+  no_log: true
+
+- name: Set connection details source
+  ansible.builtin.set_fact:
+    src_auth:           &src_auth
+      username:         "{{ src_cluster.username }}"
+      password:         "{{ src_cluster.password }}"
+      hostname:         "{{ src_cluster.hostname }}"
+      validate_certs:   false
+      use_rest:         Always
+  no_log: true
+
+- name: Create CIFS server - source
+  netapp.ontap.na_ontap_cifs_server:
+    <<:              *src_auth
+    state:           present
+    vserver:         "{{ src_cluster.svm }}"
+    admin_user_name: "{{ ad_user }}"
+    admin_password:  "{{ ad_user_pwd }}"
+    domain:          "{{ domain }}"
+    name:            "{{ src_cluster.svm }}"
+    service_state:   started
+
+- name: Create CIFS share
+  netapp.ontap.na_ontap_cifs:
+    <<:              *src_auth
+    state:           present
+    vserver:         "{{ src_cluster.svm }}"
+    name:            share123
+    path:            /
+
+- name: Set CIFS share ACLs
+  netapp.ontap.na_ontap_cifs_acl:
+    <<:            *src_auth
+    state:         present
+    vserver:       "{{ src_cluster.svm }}"
+    share_name:    share123
+    user_or_group: Everyone
+    permission:    change

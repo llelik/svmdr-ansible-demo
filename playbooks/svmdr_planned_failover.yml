@@ -1,0 +1,99 @@
+######################################
+# Planned failover ONTAP SVM DR
+#
+# 1. Snapmirror update
+# 2. Snapmirror quiesce + break
+# 3. Stop source SVM
+# 4. Start destination SVM 
+# (c) Alexey Mikhaylov
+# NetApp Professional Services Germany
+# alexey.mikhaylov@netapp.com  
+#
+# DEMO purpose only!
+#########################
+---
+- hosts: localhost
+  gather_facts: no
+  connection: local
+  vars_files:
+    - "../vars.yml"
+  tasks:
+    - name: Set connection details dest
+      ansible.builtin.set_fact:
+        dest_auth:          &dest_auth
+          username:         "{{ dst_cluster.username }}"
+          password:         "{{ dst_cluster.password }}"
+          hostname:         "{{ dst_cluster.hostname }}"
+          validate_certs:   false
+          use_rest:         Auto
+      no_log: true
+
+    - name: Set connection details source
+      ansible.builtin.set_fact:
+        src_auth:           &src_auth
+          username:         "{{ src_cluster.username }}"
+          password:         "{{ src_cluster.password }}"
+          hostname:         "{{ src_cluster.hostname }}"
+          validate_certs:   false
+          use_rest:         Always
+      no_log: true
+
+    - name: Snapmirror update
+      netapp.ontap.na_ontap_snapmirror:
+        <<:       *dest_auth
+        state:    present
+        hostname: "{{ dst_cluster.hostname }}"
+        update:   true
+        source_endpoint:
+          cluster:   "{{ src_cluster.cluster }}"
+          path:      "{{ src_cluster.svm + ':' }}"
+        destination_endpoint:
+          cluster:   "{{ dst_cluster.cluster }}"
+          path:      "{{ dst_cluster.svm + ':' }}"
+
+    - name: Sleep to let snapmirror to complete
+      ansible.builtin.pause:
+        seconds: 10
+    
+    - name: Check identity preservation
+      netapp.ontap.na_ontap_rest_info:
+        <<: *dest_auth
+        gather_subset:
+          - snapmirror_info
+        use_python_keys: true
+        parameters:
+          source.path: "{{ src_cluster.svm + ':' }}"
+        fields:
+          - 'source.path'
+          - identity_preservation
+      register: sm_info
+
+    - name: Stop source SVM
+      netapp.ontap.na_ontap_svm:
+        <<:          *src_auth
+        state:       present
+        admin_state: stopped
+        name:        "{{ src_cluster.svm }}"
+      when: sm_info.ontap_info.snapmirror_relationships.records[0].identity_preservation == "full"
+
+    - name: "Snapmirror quiesce + break"
+      netapp.ontap.na_ontap_snapmirror:
+        <<:       *dest_auth
+        state:    present
+        hostname: "{{ dst_cluster.hostname }}"
+        update:   true
+        source_endpoint:
+          cluster:    "{{ src_cluster.cluster }}"
+          path:       "{{ src_cluster.svm + ':' }}"
+        destination_endpoint:
+          cluster:    "{{ dst_cluster.cluster }}"
+          path:       "{{ dst_cluster.svm + ':' }}"
+        relationship_state: broken
+
+    - name: Make sure DR SVM is started
+      netapp.ontap.na_ontap_svm:
+        <<:         *dest_auth
+        state:       present
+        admin_state: running
+        name:        "{{ dst_cluster.svm }}"
+... 
